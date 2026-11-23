@@ -1,5 +1,8 @@
+require('dotenv').config();
 
 const express = require('express');
+const sql = require('mssql');
+
 const app = express();
 
 app.get('/', (req, res) => {
@@ -17,6 +20,7 @@ app.get('/categories', (req, res) => {
 app.get('/about', (req, res) => {
   res.send('Hello! I am a student at Ngee Ann Polytechnic. I am learning Backend Development using Node.js and Express.');
 });
+
 
 app.listen(3000, () => {
   console.log('Listening on port 3000');
