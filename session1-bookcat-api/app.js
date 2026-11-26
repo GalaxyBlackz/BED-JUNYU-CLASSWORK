@@ -1,8 +1,16 @@
-
 require('dotenv').config();
 
 const express = require('express');
 const sql = require('mssql');
+
+const Joi = require('joi');
+
+const copySchema = Joi.object({
+  isbn: Joi.string().length(10).required(),
+  copyNo: Joi.number().integer().min(1).required()
+});
+
+
 
 const app = express();
 app.use(express.json());
@@ -205,21 +213,35 @@ app.delete('/authors/:id', async (req, res) => {
 });
 
 // GET all books
+
+// ========================================
+// LAB 10 - NEW CODE STARTS HERE V
+// ========================================
+
 app.get('/books', async (req, res) => {
+  const { title } = req.query;
   let connection;
   try {
     connection = await sql.connect(dbConfig);
-    const result = await connection.request().query(
-      'SELECT ISBN, Title, YearPublish, PublisherID, BookCat FROM Book'
-    );
+    const request = connection.request();
+    let query = 'SELECT ISBN, Title, YearPublish, PublisherID, BookCat FROM Book';
+    if (title) {
+      query += " WHERE Title LIKE '%' + @title + '%'";
+      request.input('title', sql.VarChar(200), title);
+    }
+    const result = await request.query(query);
     res.status(200).json(result.recordset);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Database error' });
+    res.status(500).json({ error: 'Server error' });
   } finally {
     if (connection) await connection.close();
   }
 });
+
+// ========================================
+// LAB 10 - NEW CODE ENDS HERE ^
+// ========================================
 
 // GET one book by ISBN
 app.get('/books/:isbn', async (req, res) => {
@@ -403,6 +425,159 @@ app.delete('/books/:isbn/copies/:copyNo', async (req, res) => {
 // ========================================
 // LAB 7 - NEW CODE ENDS HERE ^
 // ========================================
+
+
+
+// ========================================
+// LAB 8 - NEW CODE STARTS HERE V
+// ========================================
+
+// Check whether a book copy is available
+async function checkAvailable(isbn, copyNo) {
+  let connection;
+  try {
+    connection = await sql.connect(dbConfig);
+    const result = await connection.request()
+      .input('isbn', sql.Char(10), isbn)
+      .input('copyNo', sql.TinyInt, copyNo)
+      .query('SELECT Status FROM BookCopy WHERE ISBN = @isbn AND CopyNo = @copyNo');
+    if (result.recordset.length === 0) return null;
+    return result.recordset[0].Status === 'D';
+  } finally {
+    if (connection) await connection.close();
+  }
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+//async function    Creates an asynchronous helper function.
+//checkAvailable(isbn, copyNo)    Receives the ISBN and copy number.
+//let connection    Declares the database connection variable.
+//await sql.connect(dbConfig)    Connects to your SQL Server database.
+//sql.Char(10)    Keeps the ISBN as text, including leading zeros.
+//sql.TinyInt    Represents the copy number.
+//SELECT Status    Retrieves the copy's current status.
+//return null    Returns null if the copy does not exist.
+//finally    Closes the database connection.
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Mark a book copy as rented
+async function markRented(isbn, copyNo) {
+  let connection;
+  try {
+    connection = await sql.connect(dbConfig);
+    await connection.request()
+      .input('isbn', sql.Char(10), isbn)
+      .input('copyNo', sql.TinyInt, copyNo)
+      .query("UPDATE BookCopy SET Status = 'M' WHERE ISBN = @isbn AND CopyNo = @copyNo");
+  } finally {
+    if (connection) await connection.close();
+  }
+}
+
+// markRented(isbn, copyNo)    Identifies which copy to rent.
+// await connection.request()    Prepares the database request.
+// UPDATE BookCopy    Updates the BookCopy table.
+// SET Status = 'M'    Marks the copy as rented.
+// WHERE ISBN = @isbn    Identifies the book.
+// AND CopyNo = @copyNo    Identifies the specific physical copy.
+// finally    Closes the database connection.
+
+
+// difference between two helper functions is:
+// Helper                       SQL operation       Purpose
+// checkAvailable()             SELECT              Read the status
+// markRented()                 UPDATE              Change the status
+
+
+// ========================================
+// LAB 9 - RETURN HELPER STARTS HERE V
+// ========================================
+
+async function markReturned(isbn, copyNo) {
+  let connection;
+  try {
+    connection = await sql.connect(dbConfig);
+    await connection.request()
+      .input('isbn', sql.Char(10), isbn)
+      .input('copyNo', sql.TinyInt, copyNo)
+      .query("UPDATE BookCopy SET Status = 'D' WHERE ISBN = @isbn AND CopyNo = @copyNo");
+  } finally {
+    if (connection) await connection.close();
+  }
+}
+
+// ========================================
+// LAB 9 - RETURN HELPER ENDS HERE ^
+// ========================================
+
+
+// PUT: Rent a book copy
+app.put('/books/:isbn/copies/:copyNo/rent', async (req, res) => {
+
+  // LAB 9 - NEW VALIDATION CODE STARTS HERE V
+
+  const { error, value } = copySchema.validate(req.params);
+  if (error) return res.status(400).json({ error: error.details[0].message });
+  const isbn = value.isbn;
+  const copyNo = value.copyNo;
+
+  // LAB 9 - NEW VALIDATION CODE ENDS HERE ^
+//////////////////////////////////////////////////////////////////////////////////////////////
+  try {
+    const available = await checkAvailable(isbn, copyNo);
+    if (available === null) return res.status(404).json({ error: 'Not found' });
+    if (available === false) return res.status(409).json({ error: 'Copy is already rented' });
+    await markRented(isbn, copyNo);
+    res.status(200).json({ ISBN: isbn, copyNo: copyNo, Status: 'M' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ========================================
+// LAB 8 - NEW CODE ENDS HERE ^
+// ========================================
+
+// 1. Create the PUT route
+// app.put('/books/:isbn/copies/:copyNo/rent', async (req, res) => {
+
+
+// PUT is used because you are updating an existing book copy.
+
+// 2. Retrieve the URL parameters
+// const isbn = req.params.isbn;
+// const copyNo = parseInt(req.params.copyNo);
+
+//////////////////////////////////////////////////////////////////////////////////////////
+
+// ========================================
+// LAB 9 - NEW CODE START HERE V
+// ========================================
+
+// PUT: Return a book copy
+app.put('/books/:isbn/copies/:copyNo/return', async (req, res) => {
+  const { error, value } = copySchema.validate(req.params);
+  if (error) return res.status(400).json({ error: error.details[0].message });
+
+  try {
+    const available = await checkAvailable(value.isbn, value.copyNo);
+    if (available === null) return res.status(404).json({ error: 'Not found' });
+    if (available === true) return res.status(409).json({ error: 'Copy is not rented' });
+    await markReturned(value.isbn, value.copyNo);
+    res.status(200).json({ ISBN: value.isbn, copyNo: value.copyNo, Status: 'D' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ========================================
+// LAB 9 - NEW CODE ENDS HERE ^
+// ========================================
+
 
 // Start server
 app.listen(3000, () => {
